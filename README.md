@@ -43,6 +43,8 @@ run_eval.py     — YOUR evaluation harness + metrics (customize before starting
 dataset.json    — YOUR evaluation dataset (customize before starting)
 program.md      — instructions for the AI coding agent (customize before starting)
 results.tsv     — experiment log (auto-generated)
+run_search.py   — CLI for open-endedness algorithms (MAP-Elites, ADAS, etc.)
+algorithms/     — open-endedness search algorithm implementations
 ```
 
 **Before you start the autonomous loop**, you customize everything to fit your use case. Once the loop begins, `run_eval.py` and `dataset.json` are fixed — only `agent.py` changes.
@@ -227,6 +229,102 @@ After customizing the above, update `program.md` to match:
 - Update the "Ideas to try" section with domain-specific suggestions
 - Update the output format section if your metrics changed
 - Update the TSV columns to match your evaluator names
+
+## Open-Endedness Algorithms
+
+Beyond simple hill-climbing, this project includes **population-based search algorithms** inspired by open-endedness research. These maintain archives of diverse agent variants and explore the design space more broadly.
+
+```bash
+# Install (same deps as base project, plus openai for the mutator LLM)
+pip install langsmith langchain-openai langgraph openai
+```
+
+### Available Algorithms
+
+| Algorithm | Command | What it does |
+|-----------|---------|-------------|
+| **MAP-Elites** | `python run_search.py map-elites` | Quality-diversity grid search. Fills a grid of behavioral niches, each with the best agent for that niche. |
+| **ADAS** | `python run_search.py adas` | Meta-agent designs novel architectures by reviewing an archive of all previous designs. |
+| **Novelty Search** | `python run_search.py novelty` | Selects for behavioral novelty, discovering diverse stepping stones to high fitness. |
+| **Go-Explore** | `python run_search.py go-explore` | Returns to promising but under-explored cells and explores from there. |
+
+### Quick Start
+
+```bash
+# Run MAP-Elites for 50 iterations
+python run_search.py map-elites --max-iterations 50
+
+# Run ADAS with a stronger mutator model
+python run_search.py adas --mutator-model gpt-4o --max-iterations 30
+
+# Run Novelty Search (pure novelty, no fitness pressure)
+python run_search.py novelty --novelty-weight 1.0 --max-iterations 50
+
+# Run Go-Explore with high curiosity
+python run_search.py go-explore --curiosity-weight 2.0 --max-iterations 50
+```
+
+### How They Work
+
+All algorithms follow the same core loop but differ in **selection** and **archiving**:
+
+1. **Select** a parent agent from the archive (algorithm-specific)
+2. **Mutate** it using an LLM (proposes code changes to `agent.py`)
+3. **Evaluate** the new variant via `run_eval.py`
+4. **Archive** the result (algorithm-specific placement/acceptance)
+5. Repeat
+
+State is persisted to `oe_state/` so you can resume interrupted runs. Results are logged to `oe_results.tsv`.
+
+### MAP-Elites
+
+Places agents in a 2D grid indexed by behavioral descriptors (e.g., tool usage score × correctness). Each cell keeps only the best agent for that niche. The mutator LLM is told which cells are empty and encouraged to explore different niches.
+
+```bash
+# Custom grid dimensions
+python run_search.py map-elites \
+  --dims tool_usage_score correctness \
+  --resolutions 5 5
+```
+
+### ADAS (Automated Design of Agentic Systems)
+
+Inspired by [Hu et al. (2024)](https://arxiv.org/abs/2408.08435). A meta-agent reviews the full archive of previous designs — both successes and failures — and proposes fundamentally new architectures (not just prompt tweaks). Encourages framework changes, novel tool patterns, and different agent types.
+
+### Novelty Search
+
+Inspired by [Lehman & Stanley (2011)](https://direct.mit.edu/evco/article/19/2/189/1001). Balances fitness and behavioral novelty using a configurable weight. Novelty is computed as mean distance to k-nearest neighbors in a behavioral descriptor space. Drives exploration of under-represented regions.
+
+```bash
+# Balance novelty and fitness equally
+python run_search.py novelty --novelty-weight 0.5
+
+# Pure novelty search (ignore fitness entirely)
+python run_search.py novelty --novelty-weight 1.0
+```
+
+### Go-Explore
+
+Inspired by [Ecoffet et al. (2021)](https://www.nature.com/articles/s41586-020-03157-9). Discretizes the behavioral space into cells, tracks visit counts, and preferentially returns to promising but under-explored cells. Avoids the "detachment" problem where search drifts away from good regions.
+
+```bash
+# More curiosity-driven exploration
+python run_search.py go-explore --curiosity-weight 2.0 --quality-weight 0.5
+```
+
+### Behavioral Descriptors
+
+All algorithms use behavioral descriptors to characterize agents. These are automatically extracted from code structure and evaluation results:
+
+| Descriptor | Source | Description |
+|-----------|--------|-------------|
+| `tool_usage_score` | Eval | Average tool usage score from evaluator |
+| `correctness` | Eval | Average correctness score |
+| `helpfulness` | Eval | Average helpfulness score |
+| `code_lines` | Code | Lines of code in agent.py |
+| `num_tools` | Code | Number of tool functions defined |
+| `prompt_length` | Code | Length of system prompt |
+| `model_tier` | Code | Numeric tier of the LLM model (0=small, 1=large) |
 
 ## How It Works
 
